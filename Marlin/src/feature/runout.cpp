@@ -39,6 +39,11 @@ bool FilamentMonitorBase::enabled = true,
   bool FilamentMonitorBase::host_handling; // = false
 #endif
 
+#if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+  uint8_t FilamentSensorBase::motion_toggle;
+  uint16_t FilamentSensorBase::last_position;
+#endif
+
 #if ENABLED(TOOLCHANGE_MIGRATION_FEATURE)
   //#define DEBUG_TOOLCHANGE_MIGRATION_FEATURE
   #include "../module/tool_change.h"

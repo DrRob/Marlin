@@ -41,7 +41,7 @@
   #include "pause.h"
 #endif
 
-//#define FILAMENT_RUNOUT_SENSOR_DEBUG
+#define FILAMENT_RUNOUT_SENSOR_DEBUG
 #ifndef FILAMENT_RUNOUT_THRESHOLD
   #define FILAMENT_RUNOUT_THRESHOLD 5
 #endif
@@ -79,6 +79,10 @@ class FilamentMonitorBase {
 
 template<class RESPONSE_T, class SENSOR_T>
 class TFilamentMonitor : public FilamentMonitorBase {
+  #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+    static inline uint16_t last_value;
+  #endif
+
   private:
     typedef RESPONSE_T response_t;
     typedef SENSOR_T   sensor_t;
@@ -107,10 +111,30 @@ class TFilamentMonitor : public FilamentMonitorBase {
       static inline void set_runout_distance(const float &mm) { response.runout_distance_mm = mm; }
     #endif
 
+    #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+      static inline void set_value(const uint16_t adc) {
+        last_value = adc;
+        sensor.set_value(adc);
+      }
+    #endif
+
     // Handle a block completion. RunoutResponseDelayed uses this to
     // add up the length of filament moved while the filament is out.
     static inline void block_completed(const block_t* const b) {
+      static uint16_t value_at_last_block;
+
       if (enabled) {
+        const uint8_t e = b->extruder;
+        const int32_t steps = b->steps.e;
+        float extruded = (TEST(b->direction_bits, E_AXIS) ? -steps : steps) * planner.steps_to_mm[E_AXIS_N(e)];
+        uint16_t difference = (last_value < value_at_last_block)?(value_at_last_block - last_value):(last_value - value_at_last_block);
+        SERIAL_ECHOPGM("Block extruded:");
+        SERIAL_PRINT(extruded, 10);
+        SERIAL_ECHOPGM(" sensor delta:");
+        SERIAL_ECHO(difference);
+        SERIAL_EOL();
+        value_at_last_block = last_value;
+
         response.block_completed(b);
         sensor.block_completed(b);
       }
@@ -148,6 +172,11 @@ class FilamentSensorBase {
     }
 
   public:
+    #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+      static uint8_t motion_toggle;
+      static uint16_t last_position;
+    #endif
+
     static inline void setup() {
       #if ENABLED(FIL_RUNOUT_PULLUP)
         #define INIT_RUNOUT_PIN(P) SET_INPUT_PULLUP(P)
@@ -161,11 +190,47 @@ class FilamentSensorBase {
       REPEAT_S(1, INCREMENT(NUM_RUNOUT_SENSORS), _INIT_RUNOUT)
       #undef _INIT_RUNOUT
       #undef INIT_RUNOUT_PIN
+      #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+        motion_toggle = 0;
+        last_position = 0;
+      #endif
     }
+
+    #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+      static inline void set_value(const uint16_t adc) {
+          static uint32_t toggle_count = 0;
+          uint16_t difference = (adc < last_position)?(last_position - adc):(adc - last_position);
+          if (difference > FILAMENT_ANALOG_MOTION_THRESHOLD) {
+            last_position = adc;
+            motion_toggle ^= _BV((1) - 1);
+            toggle_count++;
+            #ifdef FILAMENT_RUNOUT_SENSOR_DEBUG
+              static millis_t t = 0;
+              const millis_t ms = millis();
+              if (ELAPSED(ms, t)) {
+                t = millis() + 1000UL;
+                SERIAL_ECHOPGM("Motion detected - adc=");
+                SERIAL_ECHO(adc);
+                SERIAL_ECHOPGM(" last_position=");
+                SERIAL_ECHO(last_position);
+                SERIAL_ECHOPGM(" motion_toggle=");
+                SERIAL_ECHO(motion_toggle);
+                SERIAL_ECHOPGM(" toggle_count=");
+                SERIAL_ECHO(toggle_count);
+                SERIAL_EOL();
+              }
+            #endif
+          }
+      }
+    #endif
 
     // Return a bitmask of runout pin states
     static inline uint8_t poll_runout_pins() {
-      #define _OR_RUNOUT(N) | (READ(FIL_RUNOUT##N##_PIN) ? _BV((N) - 1) : 0)
+      #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+        #define _OR_RUNOUT(N) | (motion_toggle ? _BV((N) - 1) : 0)
+      #else
+        #define _OR_RUNOUT(N) | (READ(FIL_RUNOUT##N##_PIN) ? _BV((N) - 1) : 0)
+      #endif
       return (0 REPEAT_S(1, INCREMENT(NUM_RUNOUT_SENSORS), _OR_RUNOUT));
       #undef _OR_RUNOUT
     }
@@ -198,14 +263,18 @@ class FilamentSensorBase {
                       change    = old_state ^ new_state;
         old_state = new_state;
 
+/*
         #ifdef FILAMENT_RUNOUT_SENSOR_DEBUG
           if (change) {
-            SERIAL_ECHOPGM("Motion detected:");
+            SERIAL_ECHOPGM("Motion detected: (");
+            SERIAL_ECHO(change);
+            SERIAL_ECHOPGM(") ");
             LOOP_L_N(e, NUM_RUNOUT_SENSORS)
               if (TEST(change, e)) SERIAL_CHAR(' ', '0' + e);
             SERIAL_EOL();
           }
         #endif
+*/
 
         motion_detected |= change;
       }
@@ -302,7 +371,12 @@ class FilamentSensorBase {
       }
 
       static inline void filament_present(const uint8_t extruder) {
+        SERIAL_ECHOPGM("filament_present ");
+        SERIAL_ECHO(extruder);
+        SERIAL_ECHOPGM(" ");
         runout_mm_countdown[extruder] = runout_distance_mm;
+        SERIAL_ECHO(runout_mm_countdown[extruder]);
+        SERIAL_EOL();
       }
 
       static inline void block_completed(const block_t* const b) {

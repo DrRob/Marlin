@@ -87,6 +87,10 @@
   #include "../feature/filwidth.h"
 #endif
 
+#if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+  #include "../feature/runout.h"
+#endif
+
 #if HAS_POWER_MONITOR
   #include "../feature/power_monitor.h"
 #endif
@@ -1771,6 +1775,9 @@ void Temperature::init() {
   #if ENABLED(FILAMENT_WIDTH_SENSOR)
     HAL_ANALOG_SELECT(FILWIDTH_PIN);
   #endif
+  #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+    HAL_ANALOG_SELECT(FIL_ANALOG_RUNOUT_PIN);
+  #endif
   #if HAS_ADC_BUTTONS
     HAL_ANALOG_SELECT(ADC_KEYPAD_PIN);
   #endif
@@ -2791,6 +2798,14 @@ void Temperature::tick() {
       case Measure_FILWIDTH:
         if (!HAL_ADC_READY()) next_sensor_state = adc_sensor_state; // Redo this state
         else filwidth.accumulate(HAL_READ_ADC());
+      break;
+    #endif
+
+    #if ENABLED(FILAMENT_ANALOG_MOTION_SENSOR)
+      case Prepare_FILAMENT_ANALOG_MOTION: HAL_START_ADC(FIL_ANALOG_RUNOUT_PIN); break;
+      case Measure_FILAMENT_ANALOG_MOTION:
+        if (!HAL_ADC_READY()) next_sensor_state = adc_sensor_state; // Redo this state
+        else runout.set_value(HAL_READ_ADC());
       break;
     #endif
 
